@@ -1,0 +1,272 @@
+#!/bin/sh
+
+##
+# Bashistrano
+#
+#
+# Copyright (c) Alexandre Altun <alfw3d@gmail.com>
+#
+# Permission is hereby granted, free of charge, to any person obtaining a
+# copy of this software and associated documentation files,
+# to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense, 
+# and/or sell copies of the Software, and to permit persons to whom the 
+# Software is furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# The Software is provided "as is", without warranty of any kind, express 
+# or implied, including but not limited to the warranties of merchantability,
+# fitness for a particular purpose and noninfringement. In no event shall the
+# authors or copyright holders be liable for any claim, damages or other
+# liability, whether in an action of contract, tort or otherwise,
+# arising from, out of or in connection with the software or the use or other
+# dealings in the Software.
+#
+
+
+##
+# This function is called prior to the environment function.
+#
+# It allows you to define global vars which are commons to all environments
+# but feel free to add anything you want
+#
+function globalConfig()
+{
+    # Used for the name of the temporary directory containing the code
+    # to deploy.
+    project_name='example'
+}
+
+#############################################
+# ENVS
+#
+# Defaults env variables are :
+#
+# domain_path : path to the "web" root 
+#
+# current_path : path to the document root
+#
+# release_path : path to the archives directory
+#
+# shared_path : path to the shared directories (optional)
+#
+# serv_user : user on the remotes servers
+#
+# serv_hosts : hosts of the remotes servers
+#
+# shared_dirs : paths of the shared directories. Symbolic links to these
+#     directories will be created after the deploy
+#
+# scm : url of your SVN repository
+#     Export will be made from this repository and will then be deployed
+#     to the remotes servers
+#
+#############################################
+function env_dev()
+{
+    echo 'Environnement : developpement'
+    domain_path='/path/to/web/root'
+    current_path=$domain_path'/'$project_name
+    release_path=$domain_path'/releases'
+    shared_path=$domain_path'/shared'
+    serv_user='www-data'
+    serv_hosts='www.example.com www.example2.com'
+    shared_dirs='log tmp common'
+
+    scm='http://svn.example.com/trunk'
+}
+
+function env_integration()
+{
+    echo 'Environnement : integration'
+    domain_path='/path/to/web/root'
+    current_path=$domain_path'/'$project_name
+    release_path=$domain_path'/releases'
+    shared_path=$domain_path'/shared'
+    serv_user='www-data'
+    serv_hosts='www.example.com www.example2.com'
+
+    scm='http://svn.example.com/trunk'    
+}
+
+function env_production()
+{
+    echo 'Environnement : production'
+    domain_path='/path/to/web/root'
+    current_path=$domain_path'/'$project_name
+    release_path=$domain_path'/releases'
+    shared_path=$domain_path'/shared'
+    serv_user='www-data'
+    serv_hosts='www.example.com www.example2.com'
+
+    scm='http://svn.example.com/trunk'
+}
+
+#############################################
+# TASKS
+#############################################
+function task_deploy()
+{
+    local current_ts release_dir local_release_dir serv shared_links_cmd
+    current_ts=`date +%s`
+    release_dir=$release_path'/'$current_ts
+    local_release_dir=/tmp/${project_name}_${current_ts}
+
+    # svn export
+    echo "Exporting $scm : "
+    svn -q export $scm $local_release_dir
+    displayResultAndFailOnError $?
+
+   # rsync
+    echo "Deploying code to : $serv_hosts"
+    for serv in $serv_hosts
+    do
+        echo "Rsync from $local_release_dir to ${serv}:$release_dir : "
+        rsync --delete -avzl -e "ssh -o stricthostkeychecking=no"  \
+            --exclude=.svn                                      \
+            --exclude=*.svn-base                                    \
+            $local_release_dir/                      \
+            ${serv_user}@${serv}:$release_dir/
+        displayResultAndFailOnError $?
+    done
+
+    # symbolic links
+    shared_links_cmd=''
+    for dir in $shared_dirs
+    do
+        shared_links_cmd=$shared_links_cmd";ln -nfs $shared_path/$dir $release_dir/$dir"
+    done
+    shared_links_cmd=${shared_links_cmd:1}
+
+    run "$shared_links_cmd"
+    run "ln -nfs $release_dir $current_path"
+
+    echo 'Deploy finished!'
+}
+
+function task_rollback()
+{
+    echo 'Rollback!!!!'
+}
+
+function task_help()
+{
+    usage
+    exit 0
+}
+
+#############################################
+# USEFUL FUNCTIONS
+#############################################
+function show_env_vars()
+{
+    echo $domain_path
+    echo $current_path
+    echo $release_path
+    echo $serv_user
+    echo $serv_hosts
+}
+
+function run()
+{
+    local result
+    echo "Executing command '$1' : "
+
+    for serv in $serv_hosts
+    do
+        ssh ${serv_user}@${serv} /bin/bash -c "'$1'"
+    done
+
+    displayResultAndFailOnError $?
+}
+
+function usage()
+{
+    echo 'Usage : imail [ENV] [COMMAND...]'
+}
+
+function displayResultAndFailOnError()
+{
+    if [ $1 -eq 0 ]; then
+        echook 
+    else
+        echoko
+        echo "Task failed."
+        exit 3
+    fi
+}
+
+function echook()
+{
+    echo -e "${green}OK${nocolor}"
+}
+
+function echoko()
+{
+    echo -e "${red}K0${nocolor}"
+}
+
+function defineColors()
+{
+    green="\033[32m"
+    red="\033[31m"
+    nocolor="\033[00m"
+}
+
+#############################################
+# MAIN PROGRAM
+#############################################
+# The program require at least 2 arguments : an environment and a command
+if [ $# -lt 2 ]; then
+    usage
+    exit 1
+fi
+
+defineColors
+globalConfig
+
+# Retrieve the list of known functions
+commands=`declare -F | sed 's/declare -f //g' | echo $(cat)`
+
+# Load environment config
+env='env_'$1
+env_ok=0
+shift
+
+for command in $commands; do
+    if [ "$command" = "$env" ]; then
+        $env
+        env_ok=1
+        break
+    fi
+done
+
+if [ $env_ok -eq 0 ]; then
+    echo "Unknow env : $env"
+    usage
+    exit 1
+fi
+
+max=$#
+
+# Call tasks 
+for (( i=1; i<=$max; i++ )); do
+    task='task_'$1
+    task_ok=0
+    for command in $commands; do
+        if [ "$command" = "$task" ]; then
+            $task
+            task_ok=1
+            shift
+            break;
+        fi
+    done
+
+    if [ $task_ok -eq 0 ]; then
+        echo "Unknow task : $1"
+        exit 2
+    fi
+done
+
