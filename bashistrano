@@ -110,6 +110,7 @@ function env_production()
 function task_deploy()
 {
     local current_ts release_dir local_release_dir serv shared_links_cmd
+
     current_ts=`date +%s`
     release_dir=$release_path'/'$current_ts
     local_release_dir=/tmp/${project_name}_${current_ts}
@@ -133,21 +134,26 @@ function task_deploy()
     done
 
     # symbolic links
-    shared_links_cmd=''
-    for dir in $shared_dirs
-    do
-        shared_links_cmd=$shared_links_cmd";ln -nfs $shared_path/$dir $release_dir/$dir"
-    done
-    shared_links_cmd=${shared_links_cmd:1}
-
-    run "$shared_links_cmd"
-    run "ln -nfs $release_dir $current_path"
+    create_symlinks "$release_dir"
 
     echo 'Deploy finished!'
 }
 
 function task_rollback()
 {
+    local current_release previous_release
+
+    run "ls -v $release_path | tail -n 2"
+
+    current_release=`echo $run_output | echo $(cat) | cut -d ' ' -f 2`
+    previous_release=`echo $run_output | echo $(cat) | cut -d ' ' -f 1`
+
+    # create new symlinks
+    create_symlinks "$release_path/$previous_release"
+
+    # delete current release
+    run "rm -rf $release_path/$current_release"
+
     echo 'Rollback!!!!'
 }
 
@@ -155,6 +161,19 @@ function task_help()
 {
     usage
     exit 0
+}
+
+function create_symlinks()
+{
+    shared_links_cmd=''
+    for dir in $shared_dirs
+    do
+        shared_links_cmd=$shared_links_cmd";ln -nfs $shared_path/$dir $1/$dir"
+    done
+    shared_links_cmd=${shared_links_cmd:1}
+
+    run "$shared_links_cmd"
+    run "ln -nfs $1 $current_path"
 }
 
 #############################################
@@ -176,7 +195,7 @@ function run()
 
     for serv in $serv_hosts
     do
-        ssh ${serv_user}@${serv} /bin/bash -c "'$1'"
+        run_output=`ssh ${serv_user}@${serv} /bin/bash -c "'$1'"`
     done
 
     displayResultAndFailOnError $?
